@@ -39,39 +39,70 @@ class BLESerial extends AbstractSerial {
 
     Completer<List<DiscoveredDevice>> completer =
         Completer<List<DiscoveredDevice>>();
-    StreamSubscription<DiscoveredDevice> subscription;
+    late StreamSubscription<DiscoveredDevice> subscription;
 
     inSearch = true;
-    subscription = flutterReactiveBle.scanForDevices(
-      withServices: [nrfUUID, dfuUUID],
-      scanMode: ScanMode.lowLatency,
-    ).listen((device) {
-      if (!foundDevices.contains(device)) {
-        for (var foundDevice in foundDevices) {
-          if (foundDevice.id == device.id) {
-            return;
-          }
-        }
-        foundDevices.add(device);
-      }
-    }, onError: (e) {
-      log.e("Got BLE search error: $e");
-      inSearch = false;
-      if (Platform.isIOS) {
-        throw (e); // BLE is primary there, throw exception
-      } else {
-        completer.complete([]); // Other platforms: we don't care
-      }
-    });
+    Timer? hardTimer;
+    Timer? graceTimer;
 
-    Timer(const Duration(seconds: 2), () {
+    void finish() {
+      hardTimer?.cancel();
+      graceTimer?.cancel();
       subscription.cancel();
       inSearch = false;
-      try {
+      if (!completer.isCompleted) {
         completer.complete(foundDevices);
         log.d('Found BLE devices: ${foundDevices.length}');
-      } catch (_) {}
-    });
+      }
+    }
+
+    bool isChameleonName(String name) =>
+        name.startsWith('ChameleonUltra') ||
+        name.startsWith('ChameleonLite') ||
+        name.startsWith('CU-') ||
+        name.startsWith('CL-');
+
+    subscription = flutterReactiveBle
+        .scanForDevices(
+          withServices: [nrfUUID, dfuUUID],
+          scanMode: ScanMode.lowLatency,
+        )
+        .listen(
+          (device) {
+            for (var foundDevice in foundDevices) {
+              if (foundDevice.id == device.id) {
+                // Keep the entry that carries a name (scan response may arrive later).
+                if (foundDevice.name.isEmpty && device.name.isNotEmpty) {
+                  foundDevices[foundDevices.indexOf(foundDevice)] = device;
+                } else {
+                  return;
+                }
+                break;
+              }
+            }
+            if (!foundDevices.any((d) => d.id == device.id)) {
+              foundDevices.add(device);
+            }
+            // A Chameleon was found: don't wait for the full window, just give
+            // other nearby devices a short grace period to show up.
+            if (isChameleonName(device.name) && graceTimer == null) {
+              graceTimer = Timer(const Duration(milliseconds: 600), finish);
+            }
+          },
+          onError: (e) {
+            log.e("Got BLE search error: $e");
+            hardTimer?.cancel();
+            graceTimer?.cancel();
+            inSearch = false;
+            if (Platform.isIOS) {
+              if (!completer.isCompleted) completer.completeError(e);
+            } else if (!completer.isCompleted) {
+              completer.complete([]); // Other platforms: we don't care
+            }
+          },
+        );
+
+    hardTimer = Timer(const Duration(seconds: 2), finish);
 
     return completer.future;
   }
@@ -105,18 +136,22 @@ class BLESerial extends AbstractSerial {
 
       log.d("Found Chameleon ${chameleonDeviceName(device)}!");
       if (!onlyDFU || onlyDFU && dfuMode) {
-        output.add(Chameleon(
+        output.add(
+          Chameleon(
             port: bleDevice.id,
             device: device,
             type: connectionType,
-            dfu: dfuMode));
+            dfu: dfuMode,
+          ),
+        );
       }
 
       chameleonMap[bleDevice.id] = Chameleon(
-          port: bleDevice.id,
-          device: device,
-          type: connectionType,
-          dfu: dfuMode);
+        port: bleDevice.id,
+        device: device,
+        type: connectionType,
+        dfu: dfuMode,
+      );
     }
 
     return output;
@@ -125,10 +160,11 @@ class BLESerial extends AbstractSerial {
   @override
   Future<bool> connectSpecificDevice(dynamic devicePort) async {
     // As BLE is unstable, we try to connect 5 times
-    // And fail only then
+    // And fail only then. The first attempt connects directly (the device was
+    // just seen by the scan); retries fall back to prescan-based connecting.
     bool ret = false;
     for (var i = 0; i < 5; i++) {
-      ret = await connectSpecificInternal(devicePort);
+      ret = await connectSpecificInternal(devicePort, direct: i == 0);
       if (ret) {
         break;
       }
@@ -137,7 +173,10 @@ class BLESerial extends AbstractSerial {
     return ret;
   }
 
-  Future<bool> connectSpecificInternal(dynamic devicePort) async {
+  Future<bool> connectSpecificInternal(
+    dynamic devicePort, {
+    bool direct = false,
+  }) async {
     Completer<bool> completer = Completer<bool>();
     List<Uuid> services = [nrfUUID, uartRX, uartTX];
     if (chameleonMap[devicePort]!.dfu) {
@@ -146,82 +185,117 @@ class BLESerial extends AbstractSerial {
 
     await performDisconnect();
     pendingConnection = true;
-    connection = flutterReactiveBle
-        .connectToAdvertisingDevice(
-      id: devicePort,
-      withServices: services,
-      prescanDuration: const Duration(seconds: 5),
-    )
-        .listen((connectionState) async {
-      log.w(connectionState);
-      if (connectionState.connectionState == DeviceConnectionState.connected) {
-        if (chameleonMap[devicePort]!.dfu) {
-          connected = true;
-          pendingConnection = false;
-          txCharacteristic = QualifiedCharacteristic(
+    final isDfuDevice = chameleonMap[devicePort]!.dfu;
+    final Stream<ConnectionStateUpdate> connectionStream = direct
+        ? flutterReactiveBle.connectToDevice(
+            id: devicePort,
+            servicesWithCharacteristicsToDiscover: isDfuDevice
+                ? {
+                    dfuUUID: [dfuControl, dfuFirmware],
+                  }
+                : {
+                    nrfUUID: [uartRX, uartTX],
+                  },
+            connectionTimeout: const Duration(seconds: 6),
+          )
+        : flutterReactiveBle.connectToAdvertisingDevice(
+            id: devicePort,
+            withServices: services,
+            prescanDuration: const Duration(seconds: 5),
+          );
+    connection = connectionStream.listen(
+      (connectionState) async {
+        log.w(connectionState);
+        if (connectionState.connectionState ==
+            DeviceConnectionState.connected) {
+          if (chameleonMap[devicePort]!.dfu) {
+            connected = true;
+            pendingConnection = false;
+            txCharacteristic = QualifiedCharacteristic(
               serviceId: dfuUUID,
               characteristicId: dfuControl,
-              deviceId: connectionState.deviceId);
-          receivedDataStream =
-              flutterReactiveBle.subscribeToCharacteristic(txCharacteristic!);
-          receivedDataStream!.listen((data) async {
-            if (messageCallback != null) {
-              try {
-                await messageCallback(Uint8List.fromList(data));
-              } catch (_) {
-                log.w(
-                    "Received unexpected data: ${bytesToHex(Uint8List.fromList(data))}");
-              }
-            }
-          }, onError: (dynamic error) async {
-            await performDisconnect();
-            log.e(error);
-          });
+              deviceId: connectionState.deviceId,
+            );
+            receivedDataStream = flutterReactiveBle.subscribeToCharacteristic(
+              txCharacteristic!,
+            );
+            receivedDataStream!.listen(
+              (data) async {
+                if (messageCallback != null) {
+                  try {
+                    await messageCallback(Uint8List.fromList(data));
+                  } catch (_) {
+                    log.w(
+                      "Received unexpected data: ${bytesToHex(Uint8List.fromList(data))}",
+                    );
+                  }
+                }
+              },
+              onError: (dynamic error) async {
+                await performDisconnect();
+                log.e(error);
+              },
+            );
 
-          rxCharacteristic = QualifiedCharacteristic(
+            rxCharacteristic = QualifiedCharacteristic(
               serviceId: dfuUUID,
               characteristicId: dfuControl,
-              deviceId: connectionState.deviceId);
+              deviceId: connectionState.deviceId,
+            );
 
-          firmwareCharacteristic = QualifiedCharacteristic(
+            firmwareCharacteristic = QualifiedCharacteristic(
               serviceId: dfuUUID,
               characteristicId: dfuFirmware,
-              deviceId: connectionState.deviceId);
+              deviceId: connectionState.deviceId,
+            );
 
-          portName = devicePort;
-          device = chameleonMap[devicePort]!.device;
-          activeDevicePort = devicePort;
+            portName = devicePort;
+            device = chameleonMap[devicePort]!.device;
+            activeDevicePort = devicePort;
 
-          isDFU = true;
-          completer.complete(true);
-        } else {
-          txCharacteristic = QualifiedCharacteristic(
+            isDFU = true;
+            completer.complete(true);
+          } else {
+            txCharacteristic = QualifiedCharacteristic(
               serviceId: nrfUUID,
               characteristicId: uartTX,
-              deviceId: connectionState.deviceId);
-          receivedDataStream =
-              flutterReactiveBle.subscribeToCharacteristic(txCharacteristic!);
-          receivedDataStream!.listen((data) async {
-            if (messageCallback != null) {
-              try {
-                await messageCallback(Uint8List.fromList(data));
-              } catch (_) {
-                log.w(
-                    "Received unexpected data: ${bytesToHex(Uint8List.fromList(data))}");
-              }
-            }
-          }, onError: (dynamic error) async {
-            await performDisconnect();
-            log.e(error);
-          });
+              deviceId: connectionState.deviceId,
+            );
+            receivedDataStream = flutterReactiveBle.subscribeToCharacteristic(
+              txCharacteristic!,
+            );
+            receivedDataStream!.listen(
+              (data) async {
+                if (messageCallback != null) {
+                  try {
+                    await messageCallback(Uint8List.fromList(data));
+                  } catch (_) {
+                    log.w(
+                      "Received unexpected data: ${bytesToHex(Uint8List.fromList(data))}",
+                    );
+                  }
+                }
+              },
+              onError: (dynamic error) async {
+                await performDisconnect();
+                log.e(error);
+              },
+            );
 
-          rxCharacteristic = QualifiedCharacteristic(
+            rxCharacteristic = QualifiedCharacteristic(
               serviceId: nrfUUID,
               characteristicId: uartRX,
-              deviceId: connectionState.deviceId);
+              deviceId: connectionState.deviceId,
+            );
 
-          try {
-            await flutterReactiveBle.writeCharacteristicWithResponse(
+            try {
+              // Larger ATT MTU = fewer round trips for big payloads (dumps).
+              try {
+                await flutterReactiveBle
+                    .requestMtu(deviceId: connectionState.deviceId, mtu: 247)
+                    .timeout(const Duration(seconds: 2));
+              } catch (_) {}
+              await flutterReactiveBle.writeCharacteristicWithResponse(
                 rxCharacteristic!,
                 value: Uint8List.fromList([
                   0x11,
@@ -233,35 +307,38 @@ class BLESerial extends AbstractSerial {
                   0x00,
                   0x00,
                   0x02,
-                  0x00
-                ]));
+                  0x00,
+                ]),
+              );
 
-            connected = true;
-            portName = devicePort;
-            device = chameleonMap[devicePort]!.device;
-            activeDevicePort = devicePort;
+              connected = true;
+              portName = devicePort;
+              device = chameleonMap[devicePort]!.device;
+              activeDevicePort = devicePort;
 
-            connectionType = ConnectionType.ble;
-            isDFU = false;
+              connectionType = ConnectionType.ble;
+              isDFU = false;
 
-            completer.complete(true);
-          } catch (_) {
-            try {
-              completer.complete(false);
-            } catch (_) {}
+              completer.complete(true);
+            } catch (_) {
+              try {
+                completer.complete(false);
+              } catch (_) {}
+            }
           }
+        } else if (connectionState.connectionState ==
+            DeviceConnectionState.disconnected) {
+          await performDisconnect();
+          try {
+            completer.complete(false);
+          } catch (_) {}
         }
-      } else if (connectionState.connectionState ==
-          DeviceConnectionState.disconnected) {
-        await performDisconnect();
-        try {
-          completer.complete(false);
-        } catch (_) {}
-      }
-    }, onError: (Object error) {
-      log.e(error);
-      completer.complete(false);
-    });
+      },
+      onError: (Object error) {
+        log.e(error);
+        completer.complete(false);
+      },
+    );
 
     return completer.future;
   }
@@ -294,11 +371,14 @@ class BLESerial extends AbstractSerial {
   Future<bool> write(Uint8List command, {bool firmware = false}) async {
     if (firmware) {
       await flutterReactiveBle.writeCharacteristicWithoutResponse(
-          firmwareCharacteristic!,
-          value: command);
+        firmwareCharacteristic!,
+        value: command,
+      );
     } else {
-      await flutterReactiveBle
-          .writeCharacteristicWithResponse(rxCharacteristic!, value: command);
+      await flutterReactiveBle.writeCharacteristicWithResponse(
+        rxCharacteristic!,
+        value: command,
+      );
     }
 
     return true;

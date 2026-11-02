@@ -2,9 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'package:chameleon_ultra_next/app/app_state.dart';
-import 'package:chameleon_ultra_next/helpers/general.dart';
-import 'package:chameleon_ultra_next/recovery/recovery.dart' as recovery;
-import 'package:chameleon_ultra_next/recovery/recovery.dart' show Mfkey32Dart;
+import 'package:chameleon_ultra_next/helpers/mfkey32_recover.dart';
 
 class Mfkey32Page extends StatefulWidget {
   const Mfkey32Page({super.key});
@@ -62,42 +60,18 @@ class _Mfkey32PageState extends State<Mfkey32Page> {
       _recovered.clear();
     });
     try {
-      final detections = await comm.getMf1DetectionResult(_count);
-      for (final uidEntry in detections.entries) {
-        for (final blockEntry in uidEntry.value.entries) {
-          for (final typeEntry in blockEntry.value.entries) {
-            final values = typeEntry.value;
-            for (var i = 0; i < values.length; i++) {
-              for (var j = i + 1; j < values.length; j++) {
-                final mfkey = Mfkey32Dart(
-                  uid: uidEntry.key,
-                  nt0: values[i].nt,
-                  nt1: values[j].nt,
-                  nr0Enc: values[i].nr,
-                  ar0Enc: values[i].ar,
-                  nr1Enc: values[j].nr,
-                  ar1Enc: values[j].ar,
-                );
-                final key = await recovery.mfkey32(mfkey);
-                final text = key
-                    .map((b) => b.toRadixString(16).padLeft(2, '0'))
-                    .join()
-                    .toUpperCase();
-                setState(() {
-                  _recovered.add(
-                      'UID ${uidEntry.key.toRadixString(16).toUpperCase()} · '
-                      '块 ${blockEntry.key} · ${typeEntry.key} · $text');
-                });
-              }
-            }
-          }
-        }
-      }
-      if (_recovered.isEmpty) {
+      await recoverMfkey32(
+        comm,
+        _count,
+        onKey: (key) {
+          if (mounted) setState(() => _recovered.add(key.toString()));
+        },
+      );
+      if (mounted && _recovered.isEmpty) {
         setState(() => _error = '没有可恢复的 nonce 组');
       }
     } catch (e) {
-      setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _loading = false);
     }

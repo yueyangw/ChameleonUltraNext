@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -33,8 +31,11 @@ class _HfSniffPageState extends State<HfSniffPage> {
       _error = null;
       _status = '正在嗅探 5 秒...';
     });
+    // The sniffer blocks the firmware; keep the status poll off the link.
+    state.pauseRefresh();
     try {
       final data = await comm.hf14aSniff(timeoutMs: 5000);
+      if (!mounted) return;
       if (data.isEmpty) {
         setState(() {
           _status = '未捕获到数据';
@@ -48,8 +49,9 @@ class _HfSniffPageState extends State<HfSniffPage> {
         _status = '捕获完成：${capture.frames.length} 帧';
       });
     } catch (e) {
-      setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = e.toString());
     } finally {
+      state.resumeRefresh();
       if (mounted) setState(() => _capturing = false);
     }
   }
@@ -59,7 +61,7 @@ class _HfSniffPageState extends State<HfSniffPage> {
     if (files.isEmpty) return;
     final file = files.first;
     final bytes = await file.readAsBytes();
-    if (bytes == null) return;
+    if (!mounted) return;
     try {
       final capture = HfSniffCapture.fromProxmarkTrace(bytes);
       setState(() {
@@ -68,7 +70,7 @@ class _HfSniffPageState extends State<HfSniffPage> {
         _status = '已载入 ${capture.frames.length} 帧';
       });
     } catch (e) {
-      setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = e.toString());
     }
   }
 
@@ -160,7 +162,8 @@ class _HfSniffPageState extends State<HfSniffPage> {
                   child: ListTile(
                     title: Text('UID ${group.uid} · 块 ${group.block}'),
                     subtitle: Text(
-                        '${group.keyType} · ${group.exchanges.length} 组 nonce${group.canRecover ? ' · 可计算' : ''}'),
+                      '${group.keyType} · ${group.exchanges.length} 组 nonce${group.canRecover ? ' · 可计算' : ''}',
+                    ),
                     trailing: TextButton(
                       onPressed: () {
                         final command = group.canRecover
@@ -219,8 +222,10 @@ class _SummaryCard extends StatelessWidget {
                   children: [
                     SizedBox(
                       width: 110,
-                      child: Text(entry.key,
-                          style: Theme.of(context).textTheme.bodySmall),
+                      child: Text(
+                        entry.key,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
                     ),
                     Expanded(child: SelectableText(entry.value)),
                   ],

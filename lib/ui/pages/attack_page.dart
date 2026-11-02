@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import 'package:chameleon_ultra_next/app/app_state.dart';
@@ -16,13 +16,18 @@ class AttackPage extends StatefulWidget {
 }
 
 class _AttackPageState extends State<AttackPage> {
-  late final MifareClassicRecovery _recovery;
+  late MifareClassicRecovery _recovery;
+  bool _recoveryReady = false;
   final List<String> _log = <String>[];
   bool _busy = false;
 
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // AppLocalizations is an inherited widget: it cannot be looked up from
+    // initState (that throws in debug builds and left this page blank).
+    if (_recoveryReady) return;
+    _recoveryReady = true;
     final state = context.read<ChameleonGUIState>();
     _recovery = MifareClassicRecovery(
       appState: state,
@@ -73,11 +78,14 @@ class _AttackPageState extends State<AttackPage> {
                   const SizedBox(height: 8),
                   Text(_recovery.state.isEmpty ? '空闲' : _recovery.state),
                   if (_recovery.error.isNotEmpty)
-                    Text(_recovery.error,
-                        style: TextStyle(color: theme.colorScheme.error)),
+                    Text(
+                      _recovery.error,
+                      style: TextStyle(color: theme.colorScheme.error),
+                    ),
                   if (_recovery.hardnestedProgress != null)
                     LinearProgressIndicator(
-                        value: _recovery.hardnestedProgress),
+                      value: _recovery.hardnestedProgress,
+                    ),
                   const SizedBox(height: 12),
                   Wrap(
                     spacing: 8,
@@ -86,24 +94,25 @@ class _AttackPageState extends State<AttackPage> {
                       FilledButton.icon(
                         onPressed: _busy
                             ? null
-                            : () => _run('读取卡片信息',
-                                () async => _recovery.initialize()),
+                            : () => _run(
+                                '读取卡片信息',
+                                () async => _recovery.initialize(),
+                              ),
                         icon: const Icon(Icons.memory),
                         label: const Text('读取卡片'),
                       ),
                       FilledButton.icon(
                         onPressed: _busy
                             ? null
-                            : () => _run('检测密钥',
-                                () => _recovery.checkKeys()),
+                            : () => _run('检测密钥', () => _recovery.checkKeys()),
                         icon: const Icon(Icons.key),
                         label: const Text('字典检测'),
                       ),
                       FilledButton.icon(
                         onPressed: _busy
                             ? null
-                            : () => _run('自动恢复密钥',
-                                () => _recovery.recoverKeys()),
+                            : () =>
+                                  _run('自动恢复密钥', () => _recovery.recoverKeys()),
                         icon: const Icon(Icons.lock_open),
                         label: const Text('自动恢复'),
                       ),

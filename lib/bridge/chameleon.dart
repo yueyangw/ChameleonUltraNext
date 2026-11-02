@@ -117,6 +117,9 @@ class ChameleonCommunicator {
     }
   }
 
+  /// 0x00 (HF tag ok) and 0x68 (device success) both mean the command worked.
+  static bool _statusOk(int status) => status == 0x00 || status == 0x68;
+
   Future<ChameleonMessage?> sendCmd(ChameleonCommand cmd,
       {Uint8List? data,
       Duration timeout = const Duration(seconds: 5),
@@ -140,6 +143,8 @@ class ChameleonCommunicator {
       await asyncSleep(1);
     }
 
+    // Drop stale answers from an earlier request that already timed out.
+    messageQueue.removeWhere((m) => m.command == cmd.value);
     commandQueue.add(cmd.value);
 
     log.t("Sending: ${bytesToHex(dataFrame)}");
@@ -167,6 +172,9 @@ class ChameleonCommunicator {
       if (startTime.millisecondsSinceEpoch + timeout.inMilliseconds <
           DateTime.now().millisecondsSinceEpoch) {
         commandQueue.remove(cmd.value);
+        // A response that arrives after the timeout must not be mistaken for
+        // the answer to the next request with the same command id.
+        messageQueue.removeWhere((m) => m.command == cmd.value);
         if (firstRun) {
           sendCmd(cmd, data: data, timeout: timeout, firstRun: false);
         } else {
@@ -486,8 +494,13 @@ class ChameleonCommunicator {
                     .setInt32(0, resultList.length, Endian.big)))!
           .data;
 
+      if (resp.length < 18) {
+        // Firmware returned fewer entries than announced; avoid spinning.
+        break;
+      }
+
       int pos = 0;
-      while (pos < resp.length) {
+      while (pos + 18 <= resp.length) {
         resultList.add(DetectionResult(
             block: resp[0 + pos],
             type: 0x60 + (resp[1 + pos] & 0x01),
@@ -814,12 +827,15 @@ class ChameleonCommunicator {
     if (resp == null || resp.data.length < 14) {
       throw ('Invalid polling config payload');
     }
-    return PollingConfiguration.fromBytes(resp.data.sublist(0, 14));
+    return PollingConfiguration.fromBytes(resp.data);
   }
 
   Future<void> setPollingConfig(PollingConfiguration config) async {
-    await sendCmd(ChameleonCommand.setPollingConfig,
+    final resp = await sendCmd(ChameleonCommand.setPollingConfig,
         data: config.toBytes());
+    if (resp == null || !_statusOk(resp.status)) {
+      throw ('Firmware rejected the polling configuration');
+    }
   }
 
   Future<PollingRuntimeStatus> getPollingStatus() async {
@@ -827,7 +843,7 @@ class ChameleonCommunicator {
     if (resp == null || resp.data.length < 8) {
       throw ('Invalid polling status payload');
     }
-    return PollingRuntimeStatus.fromBytes(resp.data.sublist(0, 8));
+    return PollingRuntimeStatus.fromBytes(resp.data);
   }
   Future<void> setSlotTagName(
       int index, String name, TagFrequency frequency) async {
@@ -898,8 +914,13 @@ class ChameleonCommunicator {
     await sendCmd(ChameleonCommand.factoryReset, skipReceive: true);
   }
 
+  /// The settings commands only change the device's RAM copy; this writes it
+  /// to flash so it survives a reset or a field wake-up.
   Future<void> saveSettings() async {
-    await sendCmd(ChameleonCommand.saveSettings);
+    final resp = await sendCmd(ChameleonCommand.saveSettings);
+    if (resp == null || !_statusOk(resp.status)) {
+      throw ('设备未能把设置写入 Flash');
+    }
   }
 
   Future<void> resetSettings() async {
@@ -1122,8 +1143,10 @@ class ChameleonCommunicator {
       final count = (blockCount - offset).clamp(1, 32);
       final resp = await sendCmd(ChameleonCommand.mf1GetBlockData,
           data: Uint8List.fromList([startBlock + offset, count]));
-      if (resp == null || resp.data.isEmpty) {
-        break;
+      if (resp == null ||
+          !_statusOk(resp.status) ||
+          resp.data.length != count * 16) {
+        throw ('Failed to read emulator blocks ${startBlock + offset}..${startBlock + offset + count - 1}');
       }
       result.addAll(resp.data);
       offset += count;

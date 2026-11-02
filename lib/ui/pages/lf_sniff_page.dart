@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -21,7 +19,8 @@ class _LfSniffPageState extends State<LfSniffPage> {
   String? _error;
 
   Future<void> _captureSamples() async {
-    final comm = context.read<ChameleonGUIState>().communicator;
+    final state = context.read<ChameleonGUIState>();
+    final comm = state.communicator;
     if (comm == null) {
       setState(() => _error = '未连接设备');
       return;
@@ -30,12 +29,15 @@ class _LfSniffPageState extends State<LfSniffPage> {
       _capturing = true;
       _error = null;
     });
+    state.pauseRefresh();
     try {
       final samples = await comm.lfSniff(timeoutMs: _timeoutMs);
+      if (!mounted) return;
       setState(() => _capture = LfSniffCapture.fromSamples(samples));
     } catch (e) {
-      setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = e.toString());
     } finally {
+      state.resumeRefresh();
       if (mounted) setState(() => _capturing = false);
     }
   }
@@ -55,7 +57,7 @@ class _LfSniffPageState extends State<LfSniffPage> {
     if (files.isEmpty) return;
     final file = files.first;
     final bytes = await file.readAsBytes();
-    if (bytes == null) return;
+    if (!mounted) return;
     setState(() {
       _capture = LfSniffCapture.fromSamples(bytes);
       _error = null;
@@ -118,7 +120,7 @@ class _LfSniffPageState extends State<LfSniffPage> {
                           onChanged: _capturing
                               ? null
                               : (value) =>
-                                  setState(() => _timeoutMs = value.round()),
+                                    setState(() => _timeoutMs = value.round()),
                         ),
                       ),
                       Text('$_timeoutMs ms'),
@@ -176,8 +178,10 @@ class _LfSniffPageState extends State<LfSniffPage> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Manchester 解码 (RF/64)',
-                            style: Theme.of(context).textTheme.titleMedium),
+                        Text(
+                          'Manchester 解码 (RF/64)',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
                         const SizedBox(height: 8),
                         SelectableText(
                           decode.hexString.isEmpty ? '无有效数据' : decode.hexString,
@@ -195,14 +199,15 @@ class _LfSniffPageState extends State<LfSniffPage> {
   }
 
   Widget _kv(String key, String value) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: Row(
-          children: [
-            SizedBox(
-                width: 100,
-                child: Text(key, style: Theme.of(context).textTheme.bodySmall)),
-            Expanded(child: SelectableText(value)),
-          ],
+    padding: const EdgeInsets.symmetric(vertical: 2),
+    child: Row(
+      children: [
+        SizedBox(
+          width: 100,
+          child: Text(key, style: Theme.of(context).textTheme.bodySmall),
         ),
-      );
+        Expanded(child: SelectableText(value)),
+      ],
+    ),
+  );
 }

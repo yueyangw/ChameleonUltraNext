@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 
 import 'package:chameleon_ultra_next/ui/pages/settings_page.dart';
 import 'package:chameleon_ultra_next/ui/pages/tools_page.dart';

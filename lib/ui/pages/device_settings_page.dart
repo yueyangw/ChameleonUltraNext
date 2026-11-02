@@ -47,6 +47,16 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage> {
     }
     try {
       final settings = await comm.getDeviceSettings();
+      // The settings blob has no room for these two; ask for them directly.
+      int? sleepTimeout = settings.wakeTimeSeconds;
+      int? longPress = settings.longPressThreshold;
+      try {
+        sleepTimeout = await comm.getSleepTimeout();
+      } catch (_) {}
+      try {
+        longPress = await comm.getLongPressThreshold();
+      } catch (_) {}
+      if (!mounted) return;
       setState(() {
         _animation = settings.animation;
         _aPress = settings.aPress;
@@ -54,12 +64,13 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage> {
         _aLong = settings.aLongPress;
         _bLong = settings.bLongPress;
         _pairing = settings.pairingEnabled;
-        _sleepController.text = '${settings.wakeTimeSeconds ?? ''}';
-        _thresholdController.text = '${settings.longPressThreshold ?? ''}';
+        _sleepController.text = '${sleepTimeout ?? ''}';
+        _thresholdController.text = '${longPress ?? ''}';
         _loading = false;
         _error = null;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _loading = false;
         _error = e.toString();
@@ -82,13 +93,15 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage> {
       if (sleep != null) await comm.setSleepTimeout(sleep);
       final threshold = int.tryParse(_thresholdController.text.trim());
       if (threshold != null) await comm.setLongPressThreshold(threshold);
+      // Without this the firmware keeps the changes in RAM only and falls back
+      // to the stored values (e.g. full animation) after the next reset.
+      await comm.saveSettings();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('设备设置已保存')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('设备设置已保存')));
       }
     } catch (e) {
-      setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = e.toString());
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -210,7 +223,8 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage> {
                               content: const Text('这会清除设备上的所有槽位与设置，确定继续？'),
                               actions: [
                                 TextButton(
-                                  onPressed: () => Navigator.pop(context, false),
+                                  onPressed: () =>
+                                      Navigator.pop(context, false),
                                   child: const Text('取消'),
                                 ),
                                 FilledButton(
@@ -225,7 +239,8 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage> {
                               await state.communicator!.factoryReset();
                               await state.refreshAll();
                             } catch (e) {
-                              if (mounted) setState(() => _error = e.toString());
+                              if (mounted)
+                                setState(() => _error = e.toString());
                             }
                           }
                         }
@@ -267,7 +282,10 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage> {
   }
 
   Widget _buttonConfig(
-      String label, ButtonConfig value, ValueChanged<ButtonConfig> onChanged) {
+    String label,
+    ButtonConfig value,
+    ValueChanged<ButtonConfig> onChanged,
+  ) {
     return DropdownButtonFormField<ButtonConfig>(
       initialValue: value,
       decoration: InputDecoration(
@@ -276,10 +294,7 @@ class _DeviceSettingsPageState extends State<DeviceSettingsPage> {
       ),
       items: [
         for (final item in ButtonConfig.values)
-          DropdownMenuItem(
-            value: item,
-            child: Text(_buttonLabel(item)),
-          ),
+          DropdownMenuItem(value: item, child: Text(_buttonLabel(item))),
       ],
       onChanged: (selected) {
         if (selected != null) onChanged(selected);
