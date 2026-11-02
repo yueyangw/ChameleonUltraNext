@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 import 'dart:async';
+import 'package:chameleon_ultra_next/core/models/slot_info.dart';
 import 'package:chameleon_ultra_next/helpers/definitions.dart';
 import 'package:chameleon_ultra_next/helpers/general.dart';
 import 'package:chameleon_ultra_next/connector/serial_abstract.dart';
@@ -775,6 +776,59 @@ class ChameleonCommunicator {
         data: Uint8List.fromList([...uid, ...newKey, ...keys]));
   }
 
+  Future<List<SlotTypes>> getSlotTagTypesV2() async {
+    var resp = await sendCmd(ChameleonCommand.getSlotInfoV2);
+    if (resp == null || resp.data.length < 64) {
+      throw ('Invalid slot info V2 payload');
+    }
+    final tags = <SlotTypes>[];
+    for (var slot = 0; slot < 16; slot++) {
+      final offset = slot * 4;
+      tags.add(SlotTypes(
+        hf: numberToChameleonTag(
+            bytesToU16(resp.data.sublist(offset, offset + 2))),
+        lf: numberToChameleonTag(
+            bytesToU16(resp.data.sublist(offset + 2, offset + 4))),
+      ));
+    }
+    return tags;
+  }
+
+  Future<List<EnabledSlotInfo>> getEnabledSlotsV2() async {
+    var resp = await sendCmd(ChameleonCommand.getEnabledSlotsV2);
+    if (resp == null || resp.data.length < 32) {
+      throw ('Invalid enabled slots V2 payload');
+    }
+    final slots = <EnabledSlotInfo>[];
+    for (var slot = 0; slot < 16; slot++) {
+      slots.add(EnabledSlotInfo(
+        hf: resp.data[slot * 2] != 0,
+        lf: resp.data[slot * 2 + 1] != 0,
+      ));
+    }
+    return slots;
+  }
+
+  Future<PollingConfiguration> getPollingConfig() async {
+    var resp = await sendCmd(ChameleonCommand.getPollingConfig);
+    if (resp == null || resp.data.length < 14) {
+      throw ('Invalid polling config payload');
+    }
+    return PollingConfiguration.fromBytes(resp.data.sublist(0, 14));
+  }
+
+  Future<void> setPollingConfig(PollingConfiguration config) async {
+    await sendCmd(ChameleonCommand.setPollingConfig,
+        data: config.toBytes());
+  }
+
+  Future<PollingRuntimeStatus> getPollingStatus() async {
+    var resp = await sendCmd(ChameleonCommand.getPollingStatus);
+    if (resp == null || resp.data.length < 8) {
+      throw ('Invalid polling status payload');
+    }
+    return PollingRuntimeStatus.fromBytes(resp.data.sublist(0, 8));
+  }
   Future<void> setSlotTagName(
       int index, String name, TagFrequency frequency) async {
     await sendCmd(ChameleonCommand.setSlotTagNick,
@@ -1061,9 +1115,20 @@ class ChameleonCommunicator {
   }
 
   Future<Uint8List> mf1GetEmulatorBlock(int startBlock, int blockCount) async {
-    return (await sendCmd(ChameleonCommand.mf1GetBlockData,
-            data: Uint8List.fromList([startBlock, blockCount])))!
-        .data;
+    // Firmware only accepts up to 32 blocks per request, so read in chunks.
+    final result = <int>[];
+    var offset = 0;
+    while (offset < blockCount) {
+      final count = (blockCount - offset).clamp(1, 32);
+      final resp = await sendCmd(ChameleonCommand.mf1GetBlockData,
+          data: Uint8List.fromList([startBlock + offset, count]));
+      if (resp == null || resp.data.isEmpty) {
+        break;
+      }
+      result.addAll(resp.data);
+      offset += count;
+    }
+    return Uint8List.fromList(result);
   }
 
   Future<CardData> mf1GetAntiCollData() async {
@@ -1569,3 +1634,4 @@ class ChameleonCommunicator {
         );
   }
 }
+

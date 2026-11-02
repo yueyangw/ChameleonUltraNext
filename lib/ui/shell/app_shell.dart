@@ -1,15 +1,14 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
-import 'package:chameleon_ultra_next/ui/pages/device_page.dart';
-import 'package:chameleon_ultra_next/ui/pages/read_page.dart';
 import 'package:chameleon_ultra_next/ui/pages/settings_page.dart';
-import 'package:chameleon_ultra_next/ui/theme/app_theme.dart';
+import 'package:chameleon_ultra_next/ui/pages/tools_page.dart';
+import 'package:chameleon_ultra_next/ui/pages/wallet_page.dart';
+import 'package:chameleon_ultra_next/ui/pages/workbench_page.dart';
 
 /// Root navigation shell of the rewritten client.
 ///
-/// The old client used a single 370-line `MainPage` widget with a hardcoded
-/// sidebar. Pages are now independent widgets so each screen can be redesigned
-/// without touching the others.
+/// Compact layouts use a bottom navigation bar; tablets and landscape
+/// devices switch to a navigation rail without changing the page state.
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
 
@@ -22,17 +21,22 @@ class _AppShellState extends State<AppShell> {
 
   static const List<_ShellDestination> _destinations = <_ShellDestination>[
     _ShellDestination(
-      label: 'Device',
-      icon: Icons.usb_outlined,
-      selectedIcon: Icons.usb,
+      label: '工作台',
+      icon: Icons.dashboard_outlined,
+      selectedIcon: Icons.dashboard,
     ),
     _ShellDestination(
-      label: 'Read',
-      icon: Icons.sensors_outlined,
-      selectedIcon: Icons.sensors,
+      label: '卡包',
+      icon: Icons.wallet_outlined,
+      selectedIcon: Icons.wallet,
     ),
     _ShellDestination(
-      label: 'Settings',
+      label: '工具',
+      icon: Icons.handyman_outlined,
+      selectedIcon: Icons.handyman,
+    ),
+    _ShellDestination(
+      label: '设置',
       icon: Icons.settings_outlined,
       selectedIcon: Icons.settings,
     ),
@@ -41,9 +45,11 @@ class _AppShellState extends State<AppShell> {
   Widget _pageFor(int index) {
     switch (index) {
       case 0:
-        return const DevicePage();
+        return const WorkbenchPage();
       case 1:
-        return const ReadPage();
+        return const WalletPage();
+      case 2:
+        return const ToolsPage();
       default:
         return const SettingsPage();
     }
@@ -52,7 +58,6 @@ class _AppShellState extends State<AppShell> {
   @override
   Widget build(BuildContext context) {
     final isWide = MediaQuery.sizeOf(context).width >= 720;
-
     final body = IndexedStack(
       index: _index,
       children: <Widget>[
@@ -67,9 +72,10 @@ class _AppShellState extends State<AppShell> {
             NavigationRail(
               selectedIndex: _index,
               labelType: NavigationRailLabelType.all,
-              onDestinationSelected: (int value) => setState(() => _index = value),
+              onDestinationSelected: (int value) =>
+                  setState(() => _index = value),
               leading: const Padding(
-                padding: EdgeInsets.symmetric(vertical: AppSpacing.md),
+                padding: EdgeInsets.symmetric(vertical: 16),
                 child: Icon(Icons.memory_rounded),
               ),
               destinations: <NavigationRailDestination>[

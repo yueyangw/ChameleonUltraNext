@@ -25,6 +25,13 @@ enum ChameleonCommand {
   deleteSlotTagNick(1021),
   getAllSlotNicks(1038),
 
+  // ULC custom extended slot / polling commands
+  getSlotInfoV2(1900),
+  getEnabledSlotsV2(1901),
+  getPollingConfig(1902),
+  setPollingConfig(1903),
+  getPollingStatus(1904),
+
   // bootloader
   enterBootloader(1010),
 

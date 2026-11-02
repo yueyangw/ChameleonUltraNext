@@ -414,8 +414,13 @@ class SharedPreferencesProvider extends ChangeNotifier {
     return ThemeMode.values[themeValue];
   }
 
+  void touch() {
+    notifyListeners();
+  }
+
   void setTheme(ThemeMode theme) {
     _sharedPreferences.setInt('app_theme', theme.index);
+    notifyListeners();
   }
 
   bool getSideBarAutoExpansion() {
@@ -457,6 +462,7 @@ class SharedPreferencesProvider extends ChangeNotifier {
 
   void setThemeColor(int color) {
     _sharedPreferences.setInt('app_theme_color', color);
+    notifyListeners();
   }
 
   bool isDebugMode() {
@@ -551,7 +557,7 @@ class SharedPreferencesProvider extends ChangeNotifier {
   }
 
   String getLocaleString() {
-    return _sharedPreferences.getString("locale") ?? "en";
+    return _sharedPreferences.getString("locale") ?? "zh";
   }
 
   Locale getLocale() {
@@ -681,3 +687,4 @@ class SharedPreferencesProvider extends ChangeNotifier {
     _sharedPreferences.setBool('auto_connect_first_found', value);
   }
 }
+

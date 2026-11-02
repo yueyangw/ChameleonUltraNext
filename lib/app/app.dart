@@ -77,16 +77,18 @@ class ChameleonApp extends StatelessWidget {
           },
         ),
       ],
-      child: MaterialApp(
-        title: 'Chameleon Ultra Next',
-        debugShowCheckedModeBanner: false,
-        theme: AppTheme.light(seedColor: sharedPreferencesProvider.getThemeColor()),
-        darkTheme: AppTheme.dark(seedColor: sharedPreferencesProvider.getThemeColor()),
-        themeMode: sharedPreferencesProvider.getTheme(),
-        locale: sharedPreferencesProvider.getLocale(),
-        localizationsDelegates: AppLocalizations.localizationsDelegates,
-        supportedLocales: AppLocalizations.supportedLocales,
-        home: const AppShell(),
+      child: Consumer<SharedPreferencesProvider>(
+        builder: (context, prefs, _) => MaterialApp(
+          title: 'Chameleon Ultra Next',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.light(seedColor: prefs.getThemeColor()),
+          darkTheme: AppTheme.dark(seedColor: prefs.getThemeColor()),
+          themeMode: prefs.getTheme(),
+          locale: prefs.getLocale(),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: const AppShell(),
+        ),
       ),
     );
   }
