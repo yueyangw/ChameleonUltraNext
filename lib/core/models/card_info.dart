@@ -2,7 +2,7 @@ import 'dart:typed_data';
 
 import 'package:chameleon_ultra_next/helpers/definitions.dart';
 import 'package:chameleon_ultra_next/helpers/mifare_classic/general.dart';
-import 'package:chameleon_ultra_next/helpers/miforge_classic/recovery.dart';
+import 'package:chameleon_ultra_next/helpers/mifare_classic/recovery.dart';
 
 /// UI-agnostic card data models.
 ///

@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:charmeleon_ultra_next/core/models/card_info.dart';
+import 'package:chameleon_ultra_next/core/models/card_info.dart';
+import 'package:chameleon_ultra_next/helpers/definitions.dart';
+import 'package:chameleon_ultra_next/helpers/mifare_classic/general.dart';
 
 void main() {
   group('HFCardInfo', () {
