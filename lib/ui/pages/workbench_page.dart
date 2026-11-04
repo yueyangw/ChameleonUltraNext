@@ -635,12 +635,15 @@ class _PollingCard extends StatefulWidget {
 class _PollingCardState extends State<_PollingCard> {
   late PollingConfiguration _config = widget.state.polling.copy();
   late bool _enabled = _config.enabled;
+  late double _represent = _config.representCount.toDouble();
   late double _idle = _config.idleDwellMs.toDouble();
   late double _active = _config.activeDwellMs.toDouble();
-  late bool _adaptive = _config.adaptive;
-  late double _txnHold = _config.txnHoldMs.toDouble();
-  late double _hitBonus = _config.hitBonusMs.toDouble();
-  late double _missShrink = _config.missShrinkPct.toDouble();
+  late double _authFailCount = _config.authFailCount.toDouble();
+  late double _doneQuiet = _config.doneQuietMs.toDouble();
+  late double _failPollQuiet = _config.failPollQuietMs.toDouble();
+  late double _patience = _config.patienceMs.toDouble();
+  late double _sticky = _config.stickySessions.toDouble();
+  late double _lockQuiet = _config.lockQuietMs.toDouble();
   int _mask = 0;
   bool _saving = false;
   PollingConfiguration? _seen;
@@ -665,15 +668,38 @@ class _PollingCardState extends State<_PollingCard> {
     _seen = widget.state.polling;
     _config = widget.state.polling.copy();
     _enabled = _config.enabled;
+    _represent = _config.representCount.toDouble();
     _idle = _config.idleDwellMs.toDouble();
     _active = _config.activeDwellMs.toDouble();
-    _adaptive = _config.adaptive;
-    _txnHold = _config.txnHoldMs.toDouble();
-    _hitBonus = _config.hitBonusMs.toDouble();
-    _missShrink = _config.missShrinkPct.toDouble();
+    _authFailCount = _config.authFailCount.toDouble();
+    _doneQuiet = _config.doneQuietMs.toDouble();
+    _failPollQuiet = _config.failPollQuietMs.toDouble();
+    _patience = _config.patienceMs.toDouble();
+    _sticky = _config.stickySessions.toDouble();
+    _lockQuiet = _config.lockQuietMs.toDouble();
     _mask = _config.slotMask == 0
         ? ((1 << widget.state.slotCount) - 1)
         : _config.slotMask;
+  }
+
+  /// Puts every timing value, shown or not, back to the firmware defaults.
+  /// Takes effect once applied.
+  void _restoreDefaults() {
+    final d = PollingConfiguration();
+    setState(() {
+      _config
+        ..cooldownMs = d.cooldownMs
+        ..adaptive = d.adaptive
+        ..jitterPercent = d.jitterPercent;
+      _idle = d.idleDwellMs.toDouble();
+      _active = d.activeDwellMs.toDouble();
+      _authFailCount = d.authFailCount.toDouble();
+      _doneQuiet = d.doneQuietMs.toDouble();
+      _failPollQuiet = d.failPollQuietMs.toDouble();
+      _patience = d.patienceMs.toDouble();
+      _sticky = d.stickySessions.toDouble();
+      _lockQuiet = d.lockQuietMs.toDouble();
+    });
   }
 
   static String _phaseText(PollingPhase phase) {
@@ -682,12 +708,19 @@ class _PollingCardState extends State<_PollingCard> {
         return '无读卡器';
       case PollingPhase.field:
         return '检测到读卡器';
-      case PollingPhase.transaction:
-        return '读卡交互中（保持当前卡槽）';
+      case PollingPhase.hold:
+        return '读卡器认证成功（保持当前卡槽）';
       case PollingPhase.cooldown:
         return '冷却中';
+      case PollingPhase.gap:
+        return '静默中（让读卡器感知卡片离开）';
     }
   }
+
+  static String _slotList(int mask) => <String>[
+    for (var i = 0; i < 16; i++)
+      if ((mask & (1 << i)) != 0) '${i + 1}',
+  ].join('、');
 
   Future<void> _apply() async {
     setState(() => _saving = true);
@@ -697,13 +730,16 @@ class _PollingCardState extends State<_PollingCard> {
         ..enabled = _enabled
         ..idleDwellMs = _idle.round()
         ..activeDwellMs = _active.round()
-        ..adaptive = _adaptive
         ..slotMask = _mask;
-      if (c.supportsAdaptive) {
+      if (c.supportsReaderAware) {
         c
-          ..txnHoldMs = _txnHold.round()
-          ..hitBonusMs = _hitBonus.round()
-          ..missShrinkPct = _missShrink.round();
+          ..representCount = _represent.round()
+          ..authFailCount = _authFailCount.round()
+          ..doneQuietMs = _doneQuiet.round()
+          ..failPollQuietMs = _failPollQuiet.round()
+          ..patienceMs = _patience.round()
+          ..stickySessions = _sticky.round()
+          ..lockQuietMs = _lockQuiet.round();
       }
       await widget.state.applyPolling(c);
       messenger.showSnackBar(const SnackBar(content: Text('轮询配置已应用')));
@@ -714,10 +750,44 @@ class _PollingCardState extends State<_PollingCard> {
     }
   }
 
+  Widget _setting({
+    required String text,
+    required double value,
+    required double min,
+    required double max,
+    required int divisions,
+    required String label,
+    required ValueChanged<double> onChanged,
+    bool enabled = true,
+  }) {
+    return Opacity(
+      opacity: enabled ? 1 : 0.4,
+      child: IgnorePointer(
+        ignoring: !enabled,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(text),
+            Slider(
+              value: value.clamp(min, max),
+              min: min,
+              max: max,
+              divisions: divisions,
+              label: label,
+              onChanged: onChanged,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final status = widget.state.pollingStatus;
+    final polling = widget.state.polling;
+    final readerAware = polling.supportsReaderAware;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -745,51 +815,24 @@ class _PollingCardState extends State<_PollingCard> {
                           : '已停止'),
                 style: theme.textTheme.bodySmall,
               ),
-              if (widget.state.polling.supportsAdaptive && status.hitCount > 0)
+              if (polling.supportsAdaptive && status.hitCount > 0)
                 Text(
                   '读卡器已选中 ${status.hitCount} 次'
                   '${status.lastHitSlot == null ? '' : ' · 最近命中卡槽 ${status.lastHitSlot! + 1}'}',
                   style: theme.textTheme.bodySmall,
                 ),
-            ],
-            const SizedBox(height: 8),
-            Text('空闲停留 ${_idle.round()} ms'),
-            Slider(
-              value: _idle.clamp(50, 2000),
-              min: 50,
-              max: 2000,
-              divisions: 39,
-              label: '${_idle.round()} ms',
-              onChanged: (v) => setState(() => _idle = v),
-            ),
-            Text('检测到读头时停留 ${_active.round()} ms'),
-            Slider(
-              value: _active.clamp(50, 5000),
-              min: 50,
-              max: 5000,
-              divisions: 99,
-              label: '${_active.round()} ms',
-              onChanged: (v) => setState(() => _active = v),
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('随机抖动'),
-              subtitle: const Text('停留时间加入随机抖动，避免与读卡器周期同步'),
-              value: _adaptive,
-              onChanged: (v) => setState(() => _adaptive = v),
-            ),
-            const Divider(height: 24),
-            Row(
-              children: <Widget>[
-                Text('高频感应自适应', style: theme.textTheme.titleSmall),
-                const SizedBox(width: 6),
-                const Tooltip(
-                  message: '仅对 HF 卡生效：LF 没有协议层，无法判断读卡器是否在交互',
-                  child: Icon(Icons.info_outline, size: 16),
+              if (readerAware && status.pollPeriodMs != null)
+                Text(
+                  '读卡器轮询周期约 ${status.pollPeriodMs} ms',
+                  style: theme.textTheme.bodySmall,
                 ),
-              ],
-            ),
-            if (!widget.state.polling.supportsAdaptive)
+              if (readerAware && status.badMask != 0)
+                Text(
+                  '认证失败已跳过卡槽 ${_slotList(status.badMask)}',
+                  style: theme.textTheme.bodySmall,
+                ),
+            ],
+            if (!readerAware)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 child: Row(
@@ -802,7 +845,7 @@ class _PollingCardState extends State<_PollingCard> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
-                        '当前固件不支持事务保护与命中延长，请刷入对应固件。',
+                        '当前固件较旧，部分轮询功能不可用，请刷入对应固件。',
                         style: theme.textTheme.bodySmall,
                       ),
                     ),
@@ -817,61 +860,22 @@ class _PollingCardState extends State<_PollingCard> {
                   ],
                 ),
               ),
-            Opacity(
-              opacity: widget.state.polling.supportsAdaptive ? 1 : 0.4,
-              child: IgnorePointer(
-                ignoring: !widget.state.polling.supportsAdaptive,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      _txnHold.round() == 0
-                          ? '事务保护：关闭'
-                          : '事务保护：交互中最多保持 ${_txnHold.round()} ms',
-                    ),
-                    Slider(
-                      value: _txnHold.clamp(0, 5000),
-                      min: 0,
-                      max: 5000,
-                      divisions: 50,
-                      label: _txnHold.round() == 0
-                          ? '关闭'
-                          : '${_txnHold.round()} ms',
-                      onChanged: (v) => setState(() => _txnHold = v),
-                    ),
-                    Text(
-                      _hitBonus.round() == 0
-                          ? '命中延长：关闭'
-                          : '命中延长：被读卡器选中后多停 ${_hitBonus.round()} ms',
-                    ),
-                    Slider(
-                      value: _hitBonus.clamp(0, 5000),
-                      min: 0,
-                      max: 5000,
-                      divisions: 50,
-                      label: _hitBonus.round() == 0
-                          ? '关闭'
-                          : '${_hitBonus.round()} ms',
-                      onChanged: (v) => setState(() => _hitBonus = v),
-                    ),
-                    Text(
-                      _missShrink.round() == 0
-                          ? '未命中缩短：关闭'
-                          : '未命中缩短：有场却未被选中的卡槽，下次停留缩短 ${_missShrink.round()}%',
-                    ),
-                    Slider(
-                      value: _missShrink.clamp(0, 50),
-                      min: 0,
-                      max: 50,
-                      divisions: 50,
-                      label: _missShrink.round() == 0
-                          ? '关闭'
-                          : '${_missShrink.round()}%',
-                      onChanged: (v) => setState(() => _missShrink = v),
-                    ),
-                  ],
-                ),
-              ),
+            const SizedBox(height: 8),
+            _setting(
+              text: _represent.round() == 0
+                  ? '每张卡重读次数：读一次就换'
+                  : '每张卡重读次数：读卡器读完后，同一张卡再多读 ${_represent.round()} 次才换',
+              value: _represent,
+              min: 0,
+              max: 5,
+              divisions: 5,
+              label: '${_represent.round()} 次',
+              onChanged: (v) => setState(() => _represent = v),
+              enabled: readerAware,
+            ),
+            Text(
+              '读卡器只读 UID 时每张卡会被读 1+该次数 次。门禁读不稳就调高；卡槽多、嫌一轮太慢就调低。',
+              style: theme.textTheme.bodySmall,
             ),
             const Divider(height: 24),
             Text('参与轮询的卡槽', style: theme.textTheme.titleSmall),
@@ -899,6 +903,112 @@ class _PollingCardState extends State<_PollingCard> {
             Text(
               '已选择 ${_mask.toRadixString(2).replaceAll('0', '').length} 个卡槽',
               style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            Theme(
+              data: theme.copyWith(dividerColor: Colors.transparent),
+              child: ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: EdgeInsets.zero,
+                expandedCrossAxisAlignment: CrossAxisAlignment.start,
+                title: Text('高级', style: theme.textTheme.titleSmall),
+                subtitle: Text(
+                  '一般无需修改，换卡时机由读卡器的实际操作决定；下面是各种等待的耐心程度',
+                  style: theme.textTheme.bodySmall,
+                ),
+                children: <Widget>[
+                  _setting(
+                    text: '无轮询帧时的停留：读卡器开着场却不发轮询（如 LF）时每个卡槽停留 ${_active.round()} ms',
+                    value: _active,
+                    min: 50,
+                    max: 5000,
+                    divisions: 99,
+                    label: '${_active.round()} ms',
+                    onChanged: (v) => setState(() => _active = v),
+                  ),
+                  _setting(
+                    text: '空闲停留：读卡器暂时关场时每个卡槽停留 ${_idle.round()} ms',
+                    value: _idle,
+                    min: 50,
+                    max: 2000,
+                    divisions: 39,
+                    label: '${_idle.round()} ms',
+                    onChanged: (v) => setState(() => _idle = v),
+                  ),
+                  _setting(
+                    text: _authFailCount.round() == 0
+                        ? '认证失败次数：关闭（读卡器认证失败也不换卡槽）'
+                        : '认证失败次数：同一卡槽连续失败 ${_authFailCount.round()} 次就换下一个卡槽',
+                    value: _authFailCount,
+                    min: 0,
+                    max: 10,
+                    divisions: 10,
+                    label: '${_authFailCount.round()} 次',
+                    onChanged: (v) => setState(() => _authFailCount = v),
+                    enabled: readerAware,
+                  ),
+                  _setting(
+                    text: '读完后静默等待：只读 UID 的读卡器读完后，安静 ${_doneQuiet.round()} ms 就换卡槽',
+                    value: _doneQuiet,
+                    min: 0,
+                    max: 1000,
+                    divisions: 25,
+                    label: '${_doneQuiet.round()} ms',
+                    onChanged: (v) => setState(() => _doneQuiet = v),
+                    enabled: readerAware,
+                  ),
+                  _setting(
+                    text: '失败后找别的卡的静默：认证失败后读卡器只在找别的卡，安静 ${_failPollQuiet.round()} ms 就换卡槽',
+                    value: _failPollQuiet,
+                    min: 0,
+                    max: 1000,
+                    divisions: 20,
+                    label: '${_failPollQuiet.round()} ms',
+                    onChanged: (v) => setState(() => _failPollQuiet = v),
+                    enabled: readerAware,
+                  ),
+                  _setting(
+                    text: '失败后的耐心：认证失败后读卡器完全静默（如手机把标签交给 App），保持卡槽 ${_patience.round()} ms',
+                    value: _patience,
+                    min: 0,
+                    max: 3000,
+                    divisions: 30,
+                    label: '${_patience.round()} ms',
+                    onChanged: (v) => setState(() => _patience = v),
+                    enabled: readerAware,
+                  ),
+                  _setting(
+                    text: _sticky.round() == 0
+                        ? '手机重复发现保留：关闭'
+                        : '手机重复发现保留：读卡器隔一阵重新开场时，最多连续 ${_sticky.round()} 次保持同一卡槽',
+                    value: _sticky,
+                    min: 0,
+                    max: 10,
+                    divisions: 10,
+                    label: _sticky.round() == 0 ? '关闭' : '${_sticky.round()} 次',
+                    onChanged: (v) => setState(() => _sticky = v),
+                    enabled: readerAware,
+                  ),
+                  _setting(
+                    text: '认证成功后放手：读卡器安静 ${_lockQuiet.round()} ms 后才允许换卡槽',
+                    value: _lockQuiet,
+                    min: 500,
+                    max: 5000,
+                    divisions: 45,
+                    label: '${_lockQuiet.round()} ms',
+                    onChanged: (v) => setState(() => _lockQuiet = v),
+                    enabled: readerAware,
+                  ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: _saving ? null : _restoreDefaults,
+                      icon: const Icon(Icons.restore),
+                      label: const Text('恢复默认（需点应用）'),
+                    ),
+                  ),
+                ],
+              ),
             ),
             Align(
               alignment: Alignment.centerRight,

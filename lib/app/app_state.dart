@@ -15,7 +15,7 @@ import 'package:chameleon_ultra_next/sharedprefsprovider.dart';
 enum FirmwareIssue {
   noSixteenSlots('不支持 16 卡槽（仅 8 个卡槽可用）'),
   noPolling('不支持卡槽轮询'),
-  noAdaptivePolling('轮询不支持事务保护与命中延长');
+  noReaderAwarePolling('轮询是旧版计时引擎，请升级固件获得按读卡器行为换卡的新引擎');
 
   const FirmwareIssue(this.message);
   final String message;
@@ -82,8 +82,8 @@ class ChameleonGUIState extends ChangeNotifier {
       if (!supports16Slots) FirmwareIssue.noSixteenSlots,
       if (!supportsPolling)
         FirmwareIssue.noPolling
-      else if (!polling.supportsAdaptive)
-        FirmwareIssue.noAdaptivePolling,
+      else if (!polling.supportsReaderAware)
+        FirmwareIssue.noReaderAwarePolling,
     ];
   }
 

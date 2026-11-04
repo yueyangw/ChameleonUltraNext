@@ -6,7 +6,7 @@ import 'package:chameleon_ultra_next/core/models/slot_info.dart';
 
 void main() {
   group('PollingConfiguration', () {
-    test('round trips through the wire format', () {
+    test('round trips the v7 layout', () {
       final config = PollingConfiguration(
         enabled: true,
         slotMask: 0xA5A5,
@@ -17,41 +17,57 @@ void main() {
         jitterPercent: 15,
         order: 1,
         keepAwake: false,
+        doneQuietMs: 60,
+        patienceMs: 1200,
+        stickySessions: 5,
+        failPollQuietMs: 90,
+        representCount: 3,
+        authFailCount: 2,
+        lockQuietMs: 2500,
       );
 
-      final decoded = PollingConfiguration.fromBytes(config.toBytes());
+      final bytes = config.toBytes();
+      expect(bytes.length, 24);
+      expect(bytes[0], 7);
+      final decoded = PollingConfiguration.fromBytes(bytes);
 
+      expect(decoded.supportsReaderAware, isTrue);
       expect(decoded.enabled, isTrue);
       expect(decoded.slotMask, 0xA5A5);
       expect(decoded.idleDwellMs, 350);
       expect(decoded.activeDwellMs, 1500);
       expect(decoded.cooldownMs, 250);
-      expect(decoded.adaptive, isTrue);
       expect(decoded.jitterPercent, 15);
       expect(decoded.order, 1);
       expect(decoded.keepAwake, isFalse);
+      expect(decoded.doneQuietMs, 60);
+      expect(decoded.patienceMs, 1200);
+      expect(decoded.stickySessions, 5);
+      expect(decoded.failPollQuietMs, 90);
+      expect(decoded.representCount, 3);
+      expect(decoded.authFailCount, 2);
+      expect(decoded.lockQuietMs, 2500);
     });
 
-    test('uses the 24 byte layout with adaptive fields', () {
-      final config = PollingConfiguration(
-        txnHoldMs: 2500,
-        hitBonusMs: 700,
-        missShrinkPct: 30,
-      );
-      final bytes = config.toBytes();
-      expect(bytes.length, 24);
-      expect(bytes[0], 3);
-      final decoded = PollingConfiguration.fromBytes(bytes);
-      expect(decoded.supportsAdaptive, isTrue);
-      expect(decoded.txnHoldMs, 2500);
-      expect(decoded.hitBonusMs, 700);
-      expect(decoded.missShrinkPct, 30);
+    test('keeps an older 24 byte record unchanged', () {
+      final v6 = Uint8List(24)
+        ..[0] = 6
+        ..[14] = 0xDC
+        ..[15] = 0x05
+        ..[23] = 4;
+      final decoded = PollingConfiguration.fromBytes(v6);
+      expect(decoded.supportsReaderAware, isFalse);
+      final bytes = decoded.toBytes();
+      expect(bytes[0], 6);
+      expect(bytes[14], 0xDC);
+      expect(bytes[15], 0x05);
+      expect(bytes[23], 4);
     });
 
     test('keeps the padded 16 byte layout for the previous firmware', () {
       final old = Uint8List(16)..[0] = 2;
       final decoded = PollingConfiguration.fromBytes(old);
-      expect(decoded.supportsAdaptive, isFalse);
+      expect(decoded.supportsReaderAware, isFalse);
       expect(decoded.toBytes().length, 16);
       expect(decoded.toBytes()[0], 2);
     });
@@ -68,6 +84,11 @@ void main() {
       expect(config.enabled, isFalse);
       expect(config.idleDwellMs, 500);
       expect(config.activeDwellMs, 2000);
+      expect(config.authFailCount, 3);
+      expect(config.doneQuietMs, 100);
+      expect(config.patienceMs, 800);
+      expect(config.stickySessions, 3);
+      expect(config.lockQuietMs, 1000);
     });
   });
 
@@ -92,7 +113,7 @@ void main() {
           6,
         ]),
       );
-      expect(status.phase, PollingPhase.transaction);
+      expect(status.phase, PollingPhase.hold);
       expect(status.hitCount, 7);
       expect(status.lastHitSlot, 6);
 
@@ -101,6 +122,19 @@ void main() {
       );
       expect(none.phase, PollingPhase.idle);
       expect(none.lastHitSlot, isNull);
+    });
+
+    test('decodes the 20 byte layout with reader-aware state', () {
+      final status = PollingRuntimeStatus.fromBytes(
+        Uint8List.fromList([
+          1, 1, 2, 1, 0, 0, 0, 0, 0, 0, 1, 4, 0, 0, 0xFF, //
+          0x05, 0x80, 1, 0x5A, 0x00,
+        ]),
+      );
+      expect(status.phase, PollingPhase.gap);
+      expect(status.badMask, 0x8005);
+      expect(status.representsLeft, 1);
+      expect(status.pollPeriodMs, 90);
     });
 
     test('decodes the little-endian 8 byte layout', () {
